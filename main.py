@@ -14,19 +14,6 @@ import plotly.graph_objects as go
 from typing import Dict, List, Optional, Any
 
 # ============================================
-# LOAD GOOGLE SHEETS URLS FROM SECRETS
-# ============================================
-# Load Google Sheets URLs from secrets
-if "sheets_urls" not in st.session_state:
-    st.session_state.sheets_urls = {
-        "users": st.secrets["google_sheets"]["users_sheet_url"],
-        "properties": st.secrets["google_sheets"]["properties_sheet_url"],
-        "mother_clients": st.secrets["google_sheets"]["mother_clients_sheet_url"],
-        "login": st.secrets["google_sheets"]["login_sheet_url"],
-        "transactions": st.secrets["google_sheets"]["transactions_sheet_url"]
-    }
-
-# ============================================
 # SYSTEM CONFIGURATION - EXACTLY AS ORIGINAL
 # ============================================
 st.set_page_config(
@@ -116,13 +103,19 @@ def init_session_state():
     if 'current_page' not in st.session_state:
         st.session_state.current_page = None
     if 'sheets_urls' not in st.session_state:
-        st.session_state.sheets_urls = {}
+        st.session_state.sheets_urls = {
+            "users": st.secrets["google_sheets"]["users_sheet_url"],
+            "properties": st.secrets["google_sheets"]["properties_sheet_url"],
+            "mother_clients": st.secrets["google_sheets"]["mother_clients_sheet_url"],
+            "login": st.secrets["google_sheets"]["login_sheet_url"],
+            "transactions": st.secrets["google_sheets"]["transactions_sheet_url"]
+        }
     if 'sheets_metadata' not in st.session_state:
         st.session_state.sheets_metadata = {}
     if 'activity_log' not in st.session_state:
         st.session_state.activity_log = []
     if 'users_sheet_configured' not in st.session_state:
-        st.session_state.users_sheet_configured = False
+        st.session_state.users_sheet_configured = True
 
 init_session_state()
 
