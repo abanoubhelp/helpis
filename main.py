@@ -417,16 +417,16 @@ class PropertyLinkFinder:
                 st.warning("No matching properties found")
 
 # ============================================
-# OWNER DASHBOARD - COMPLETE MONITORING
+# OWNER DASHBOARD - مع نشاط اليوم
 # ============================================
 def render_owner_dashboard():
-    """Owner Dashboard - Complete Monitoring System"""
+    """Owner Dashboard - Complete Monitoring System with Today's Activity"""
     user = st.session_state.user
     st.markdown(f"<div class='main-header'>Executive Monitoring Dashboard</div>", unsafe_allow_html=True)
     st.markdown(f"**Welcome, {user['full_name']}** | *Owner Access*")
     
-    # ============ SESSION SHEETS LOADER ============
-    with st.expander("📋 Session Sheets Loader", expanded=True):
+    # ============ SESSION SHEETS LOADER (مخفي بشكل افتراضي) ============
+    with st.expander("📋 Session Sheets Loader", expanded=False):
         st.markdown("### Load Sheets for This Session")
         st.markdown("*All sheets are session-only and cleared on logout*")
         
@@ -447,13 +447,6 @@ def render_owner_dashboard():
                 placeholder="https://docs.google.com/spreadsheets/d/..."
             )
             
-            activity_url = st.text_input(
-                "📝 Activity Logs Sheet URL",
-                value=st.session_state.sheets_urls.get('activity', ''),
-                key="owner_activity",
-                placeholder="https://docs.google.com/spreadsheets/d/..."
-            )
-        
         with col2:
             transactions_url = st.text_input(
                 "💰 Transactions Sheet URL",
@@ -470,13 +463,10 @@ def render_owner_dashboard():
             )
         
         if st.button("💾 Load All Sheets", use_container_width=True):
-            # Update session state
             st.session_state.sheets_urls['properties'] = properties_url
             st.session_state.sheets_urls['mother_clients'] = mother_clients_url
-            st.session_state.sheets_urls['activity'] = activity_url
             st.session_state.sheets_urls['transactions'] = transactions_url
             
-            # Parse sales sheets
             if sales_sheets:
                 st.session_state.sheets_urls['sales_sheets'] = [
                     url.strip() for url in sales_sheets.split('\n') if url.strip()
@@ -491,131 +481,184 @@ def render_owner_dashboard():
             st.success("✅ Sheets loaded successfully!")
             st.rerun()
     
-    # ============ SESSION SHEETS MONITOR ============
-    st.markdown("---")
-    st.markdown("### 📊 Session Sheets Monitor")
+    # ============ تبويبات المالك ============
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 نشاط اليوم", "📁 Session Monitor", "📈 Reports", "💰 Transactions"])
     
-    monitor_data = []
-    for sheet_type, url in st.session_state.sheets_urls.items():
-        if url and sheet_type != 'users':
-            masked_url = url[:30] + "..." if len(url) > 30 else url
-            metadata = st.session_state.sheets_metadata.get(sheet_type, {})
+    with tab1:
+        st.markdown("### 👤 نشاط المستخدمين اليوم")
+        st.markdown("*آخر تحديث: يعتمد على نشاط الجلسة الحالية*")
+        
+        today_activity = get_today_activity()
+        
+        if today_activity:
+            df_today = pd.DataFrame(today_activity)
             
-            monitor_data.append({
-                "Sheet Name": sheet_type.replace('_', ' ').title(),
-                "Type": sheet_type,
-                "Loaded By": metadata.get('loaded_by', 'Owner'),
-                "Load Time": metadata.get('load_time', 'N/A'),
-                "URL": masked_url
-            })
-    
-    if monitor_data:
-        st.dataframe(pd.DataFrame(monitor_data), use_container_width=True)
-    else:
-        st.info("No sheets loaded yet")
-    
-    # ============ LOGIN ACTIVITY MONITOR ============
-
-    # ============ SHEET ACCESS MONITOR ============
-    st.markdown("### 📁 Sheet Access Monitor")
-    
-    sheet_access = [log for log in today_activity if log['action'] == 'sheet_load']
-    
-    if sheet_access:
-        df_access = pd.DataFrame(sheet_access)
-        display_cols = ['timestamp', 'username', 'details.sheet_type', 'details.sheet_id']
-        st.dataframe(df_access, use_container_width=True)
-    else:
-        st.info("No sheet access today")
-    
-    # ============ AUTOMATIC REPORTS ============
-    st.markdown("---")
-    st.markdown("### 📈 Automatic Reports")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        active_users = len(set([log['username'] for log in today_activity]))
-        st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-        st.metric("Active Users Today", active_users)
-        st.markdown("</div>", unsafe_allow_html=True)
-    
-    with col2:
-        sheets_loaded = len([log for log in today_activity if log['action'] == 'sheet_load'])
-        st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-        st.metric("Sheets Loaded Today", sheets_loaded)
-        st.markdown("</div>", unsafe_allow_html=True)
-    
-    with col3:
-        searches = len([log for log in today_activity if 'search' in log['action'].lower()])
-        st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-        st.metric("Total Searches", searches)
-        st.markdown("</div>", unsafe_allow_html=True)
-    
-    with col4:
-        exports = len([log for log in today_activity if log['action'] == 'export'])
-        st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-        st.metric("Total Exports", exports)
-        st.markdown("</div>", unsafe_allow_html=True)
-    
-    # Most Accessed Sheets
-    st.markdown("### 📊 Most Accessed Sheets Today")
-    
-    sheet_counts = {}
-    for log in [l for l in today_activity if l['action'] == 'sheet_load']:
-        sheet_type = log.get('details', {}).get('sheet_type', 'unknown')
-        sheet_counts[sheet_type] = sheet_counts.get(sheet_type, 0) + 1
-    
-    if sheet_counts:
-        df_counts = pd.DataFrame([
-            {"Sheet": k, "Accesses": v} 
-            for k, v in sorted(sheet_counts.items(), key=lambda x: x[1], reverse=True)
-        ])
-        st.dataframe(df_counts, use_container_width=True)
-    else:
-        st.info("No sheet access recorded today")
-    
-    # ============ TRANSACTIONS VIEWER ============
-    st.markdown("---")
-    st.markdown("### 💰 Transactions Sheet Viewer")
-    
-    if st.session_state.sheets_urls.get('transactions'):
-        if st.button("📥 Load Transactions Data", use_container_width=True):
-            transactions_df = load_google_sheet(
-                st.session_state.sheets_urls['transactions'], 
-                "transactions"
+            # فلترة حسب النشاط
+            col1, col2 = st.columns(2)
+            with col1:
+                show_logins = st.checkbox("عرض تسجيلات الدخول", value=True, key="owner_show_logins")
+            with col2:
+                show_sheets = st.checkbox("عرض تحميل الشيتات", value=True, key="owner_show_sheets")
+            
+            filtered_df = df_today.copy()
+            if not show_logins:
+                filtered_df = filtered_df[~filtered_df['action'].isin(['login', 'logout'])]
+            if not show_sheets:
+                filtered_df = filtered_df[filtered_df['action'] != 'sheet_load']
+            
+            # عرض الميتريكس
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+                st.metric("إجمالي المستخدمين النشطين اليوم", len(set([log['username'] for log in today_activity])))
+                st.markdown("</div>", unsafe_allow_html=True)
+            
+            with col2:
+                logins_count = len([log for log in today_activity if log['action'] == 'login'])
+                st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+                st.metric("تسجيلات الدخول", logins_count)
+                st.markdown("</div>", unsafe_allow_html=True)
+            
+            with col3:
+                actions_count = len(today_activity)
+                st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+                st.metric("إجمالي النشاطات", actions_count)
+                st.markdown("</div>", unsafe_allow_html=True)
+            
+            # عرض الجدول
+            st.markdown("#### 📋 سجل النشاطات اليوم")
+            st.dataframe(
+                filtered_df[['timestamp', 'username', 'role', 'action', 'details']].sort_values('timestamp', ascending=False),
+                use_container_width=True,
+                height=500
             )
             
-            if not transactions_df.empty:
-                st.success(f"Loaded {len(transactions_df)} transactions")
-                st.dataframe(transactions_df, use_container_width=True, height=400)
+            # تصدير
+            buffer = BytesIO()
+            filtered_df.to_excel(buffer, index=False, engine='openpyxl')
+            st.download_button(
+                label="📥 تصدير نشاط اليوم (Excel)",
+                data=buffer.getvalue(),
+                file_name=f"today_activity_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        else:
+            st.info("لا يوجد أي نشاط اليوم حتى الآن")
+    
+    with tab2:
+        st.markdown("### 📊 Session Sheets Monitor")
+        
+        monitor_data = []
+        for sheet_type, url in st.session_state.sheets_urls.items():
+            if url and sheet_type != 'users':
+                masked_url = url[:30] + "..." if len(url) > 30 else url
+                metadata = st.session_state.sheets_metadata.get(sheet_type, {})
                 
-                # Summary metrics
-                col1, col2, col3 = st.columns(3)
+                monitor_data.append({
+                    "Sheet Name": sheet_type.replace('_', ' ').title(),
+                    "Type": sheet_type,
+                    "Loaded By": metadata.get('loaded_by', 'Owner'),
+                    "Load Time": metadata.get('load_time', 'N/A'),
+                    "URL": masked_url
+                })
+        
+        if monitor_data:
+            st.dataframe(pd.DataFrame(monitor_data), use_container_width=True)
+        else:
+            st.info("No sheets loaded yet")
+        
+        st.markdown("### 📁 Sheet Access Monitor")
+        sheet_access = [log for log in get_today_activity() if log['action'] == 'sheet_load']
+        
+        if sheet_access:
+            df_access = pd.DataFrame(sheet_access)
+            st.dataframe(df_access[['timestamp', 'username', 'details']], use_container_width=True)
+        else:
+            st.info("No sheet access today")
+    
+    with tab3:
+        st.markdown("### 📈 Automatic Reports")
+        
+        today_activity = get_today_activity()
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            active_users = len(set([log['username'] for log in today_activity]))
+            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+            st.metric("Active Users Today", active_users)
+            st.markdown("</div>", unsafe_allow_html=True)
+        
+        with col2:
+            sheets_loaded = len([log for log in today_activity if log['action'] == 'sheet_load'])
+            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+            st.metric("Sheets Loaded Today", sheets_loaded)
+            st.markdown("</div>", unsafe_allow_html=True)
+        
+        with col3:
+            searches = len([log for log in today_activity if 'search' in log['action'].lower()])
+            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+            st.metric("Total Searches", searches)
+            st.markdown("</div>", unsafe_allow_html=True)
+        
+        with col4:
+            exports = len([log for log in today_activity if log['action'] == 'export'])
+            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+            st.metric("Total Exports", exports)
+            st.markdown("</div>", unsafe_allow_html=True)
+        
+        st.markdown("### 📊 Most Accessed Sheets Today")
+        sheet_counts = {}
+        for log in [l for l in today_activity if l['action'] == 'sheet_load']:
+            sheet_type = log.get('details', {}).get('sheet_type', 'unknown')
+            sheet_counts[sheet_type] = sheet_counts.get(sheet_type, 0) + 1
+        
+        if sheet_counts:
+            df_counts = pd.DataFrame([
+                {"Sheet": k, "Accesses": v} 
+                for k, v in sorted(sheet_counts.items(), key=lambda x: x[1], reverse=True)
+            ])
+            st.dataframe(df_counts, use_container_width=True)
+        else:
+            st.info("No sheet access recorded today")
+    
+    with tab4:
+        st.markdown("### 💰 Transactions Sheet Viewer")
+        
+        if st.session_state.sheets_urls.get('transactions'):
+            if st.button("📥 Load Transactions Data", use_container_width=True):
+                transactions_df = load_google_sheet(
+                    st.session_state.sheets_urls['transactions'], 
+                    "transactions"
+                )
                 
-                with col1:
-                    st.metric("Total Transactions", len(transactions_df))
-                
-                amount_col = None
-                for col in transactions_df.columns:
-                    if 'amount' in col.lower() or 'price' in col.lower():
-                        amount_col = col
-                        break
-                
-                if amount_col:
-                    with col2:
-                        total_amount = transactions_df[amount_col].sum()
-                        st.metric("Total Amount", f"${total_amount:,.0f}")
+                if not transactions_df.empty:
+                    st.success(f"Loaded {len(transactions_df)} transactions")
+                    st.dataframe(transactions_df, use_container_width=True, height=400)
                     
-                    with col3:
-                        avg_amount = transactions_df[amount_col].mean()
-                        st.metric("Average Amount", f"${avg_amount:,.0f}")
-                
-                track_activity("view_transactions", {"count": len(transactions_df)})
-            else:
-                st.warning("Could not load transactions data")
-    else:
-        st.info("No Transactions Sheet loaded")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Transactions", len(transactions_df))
+                    
+                    amount_col = None
+                    for col in transactions_df.columns:
+                        if 'amount' in col.lower() or 'price' in col.lower():
+                            amount_col = col
+                            break
+                    
+                    if amount_col:
+                        with col2:
+                            total_amount = transactions_df[amount_col].sum()
+                            st.metric("Total Amount", f"${total_amount:,.0f}")
+                        with col3:
+                            avg_amount = transactions_df[amount_col].mean()
+                            st.metric("Average Amount", f"${avg_amount:,.0f}")
+                    
+                    track_activity("view_transactions", {"count": len(transactions_df)})
+                else:
+                    st.warning("Could not load transactions data")
+        else:
+            st.info("No Transactions Sheet loaded")
 
 # ============================================
 # MANAGER DASHBOARD - مع نشاط اليوم
@@ -626,7 +669,7 @@ def render_manager_dashboard():
     st.markdown("<div class='main-header'>Management Dashboard</div>", unsafe_allow_html=True)
     st.markdown(f"**Welcome, {user['full_name']}** | *Manager Access*")
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Properties", "All Clients", "Transactions", "Activity Logs", "📊 نشاط اليوم"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Properties", "All Clients", "Transactions", "📊 نشاط اليوم"])
     
     with tab1:
         st.markdown("#### Property Inventory")
@@ -671,20 +714,6 @@ def render_manager_dashboard():
                 st.info("No transactions available")
     
     with tab4:
-        st.markdown("#### Activity Logs")
-        if st.button("📥 Load Activity Logs", key="mgr_load_activity"):
-            activity_df = load_google_sheet(
-                st.session_state.sheets_urls.get('activity', ''), 
-                "activity"
-            )
-            if not activity_df.empty:
-                st.success(f"Loaded {len(activity_df)} activity records")
-                st.dataframe(activity_df, use_container_width=True, height=500)
-                track_activity("manager_view_activity")
-            else:
-                st.info("No activity logs available")
-    
-    with tab5:
         st.markdown("### 👤 نشاط المستخدمين اليوم")
         st.markdown("*آخر تحديث: يعتمد على نشاط الجلسة الحالية*")
         
@@ -696,9 +725,9 @@ def render_manager_dashboard():
             # فلترة حسب النشاط
             col1, col2 = st.columns(2)
             with col1:
-                show_logins = st.checkbox("عرض تسجيلات الدخول", value=True)
+                show_logins = st.checkbox("عرض تسجيلات الدخول", value=True, key="mgr_show_logins")
             with col2:
-                show_sheets = st.checkbox("عرض تحميل الشيتات", value=True)
+                show_sheets = st.checkbox("عرض تحميل الشيتات", value=True, key="mgr_show_sheets")
             
             filtered_df = df_today.copy()
             if not show_logins:
@@ -730,7 +759,7 @@ def render_manager_dashboard():
             st.dataframe(
                 filtered_df[['timestamp', 'username', 'role', 'action', 'details']].sort_values('timestamp', ascending=False),
                 use_container_width=True,
-                height=400
+                height=500
             )
             
             # تصدير
