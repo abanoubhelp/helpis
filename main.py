@@ -515,19 +515,7 @@ def render_owner_dashboard():
         st.info("No sheets loaded yet")
     
     # ============ LOGIN ACTIVITY MONITOR ============
-    st.markdown("---")
-    st.markdown("### 👤 Login Activity Monitor")
-    
-    today_activity = get_today_activity()
-    login_events = [log for log in today_activity if log['action'] in ['login', 'logout']]
-    
-    if login_events:
-        df_logins = pd.DataFrame(login_events)
-        st.dataframe(df_logins[['timestamp', 'username', 'role', 'action']], 
-                    use_container_width=True)
-    else:
-        st.info("No login activity today")
-    
+
     # ============ SHEET ACCESS MONITOR ============
     st.markdown("### 📁 Sheet Access Monitor")
     
