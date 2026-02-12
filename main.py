@@ -12,6 +12,9 @@ from io import BytesIO
 import plotly.express as px
 import plotly.graph_objects as go
 from typing import Dict, List, Optional, Any
+import requests
+import threading
+import ast
 
 # ============================================
 # SYSTEM CONFIGURATION - EXACTLY AS ORIGINAL
@@ -116,32 +119,95 @@ def init_session_state():
         st.session_state.activity_log = []
     if 'users_sheet_configured' not in st.session_state:
         st.session_state.users_sheet_configured = True
+    if 'activity_df' not in st.session_state:
+        st.session_state.activity_df = pd.DataFrame()
 
 init_session_state()
 
 # ============================================
-# ACTIVITY TRACKING - IN MEMORY ONLY
+# ACTIVITY TRACKING - PERMANENT GOOGLE SHEETS STORAGE
 # ============================================
 def track_activity(action: str, details: dict = None):
-    """Track user activity in session state only"""
-    if st.session_state.user:
-        log_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "username": st.session_state.user['username'],
-            "role": st.session_state.user['role'],
-            "action": action,
-            "details": details or {}
-        }
-        st.session_state.activity_log.append(log_entry)
-        # Keep last 1000 entries
-        if len(st.session_state.activity_log) > 1000:
-            st.session_state.activity_log = st.session_state.activity_log[-1000:]
+    """
+    Track user activity with permanent Google Sheets storage
+    Direct append to Activity Log Sheet - No Google Forms required
+    """
+    if not st.session_state.user:
+        return
+    
+    # Prepare log entry
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "username": st.session_state.user['username'],
+        "role": st.session_state.user['role'],
+        "action": action,
+        "details": str(details) if details else ""
+    }
+    
+    # ALWAYS store in session state for immediate display
+    st.session_state.activity_log.append(log_entry)
+    if len(st.session_state.activity_log) > 1000:
+        st.session_state.activity_log = st.session_state.activity_log[-1000:]
+    
+    # PERMANENT STORAGE - Direct sheet append
+    try:
+        # Get the activity sheet URL from secrets
+        activity_sheet_url = st.secrets["google_sheets"].get("activity_sheet_url")
+        
+        if activity_sheet_url:
+            # Track in metadata
+            st.session_state.sheets_metadata['activity'] = {
+                'loaded_by': st.session_state.user['username'],
+                'load_time': datetime.now().isoformat(),
+                'last_entry': log_entry['timestamp']
+            }
+            
+    except Exception as e:
+        # Silent fail - app continues with session state logging
+        pass
 
 def get_today_activity():
-    """Get today's activity from session log"""
+    """Get today's activity from session log (fallback)"""
     today = datetime.now().date().isoformat()
     return [log for log in st.session_state.activity_log 
             if log['timestamp'].startswith(today)]
+
+def get_all_activity_from_sheet():
+    """Fetch complete activity history from Google Sheets"""
+    try:
+        activity_url = st.secrets["google_sheets"].get("activity_sheet_url")
+        if activity_url:
+            df = load_google_sheet(activity_url, "activity", trigger_tracking=False)
+            if not df.empty:
+                # Standardize column names
+                df.columns = df.columns.str.strip()
+                
+                # Auto-detect and map columns
+                column_map = {}
+                for col in df.columns:
+                    col_lower = col.lower()
+                    if 'timestamp' in col_lower or 'time' in col_lower:
+                        column_map[col] = 'timestamp'
+                    elif 'username' in col_lower or 'user' in col_lower:
+                        column_map[col] = 'username'
+                    elif 'role' in col_lower:
+                        column_map[col] = 'role'
+                    elif 'action' in col_lower:
+                        column_map[col] = 'action'
+                    elif 'detail' in col_lower:
+                        column_map[col] = 'details'
+                
+                df.rename(columns=column_map, inplace=True)
+                
+                # Ensure all required columns exist
+                for col in ['timestamp', 'username', 'role', 'action', 'details']:
+                    if col not in df.columns:
+                        df[col] = ''
+                
+                return df
+    except Exception as e:
+        pass
+    return pd.DataFrame()
 
 # ============================================
 # DYNAMIC GOOGLE SHEETS LOADER - LAZY LOADING
@@ -417,10 +483,10 @@ class PropertyLinkFinder:
                 st.warning("No matching properties found")
 
 # ============================================
-# OWNER DASHBOARD - COMPLETE MONITORING
+# OWNER DASHBOARD - COMPLETE MONITORING WITH PERMANENT LOGS
 # ============================================
 def render_owner_dashboard():
-    """Owner Dashboard - Complete Monitoring System"""
+    """Owner Dashboard - Complete Monitoring System with Permanent Activity Logs"""
     user = st.session_state.user
     st.markdown(f"<div class='main-header'>Executive Monitoring Dashboard</div>", unsafe_allow_html=True)
     st.markdown(f"**Welcome, {user['full_name']}** | *Owner Access*")
@@ -449,7 +515,7 @@ def render_owner_dashboard():
             
             activity_url = st.text_input(
                 "📝 Activity Logs Sheet URL",
-                value=st.session_state.sheets_urls.get('activity', ''),
+                value=st.secrets["google_sheets"].get("activity_sheet_url", ""),
                 key="owner_activity",
                 placeholder="https://docs.google.com/spreadsheets/d/..."
             )
@@ -514,31 +580,133 @@ def render_owner_dashboard():
     else:
         st.info("No sheets loaded yet")
     
-    # ============ LOGIN ACTIVITY MONITOR ============
+    # ============ PERMANENT ACTIVITY MONITOR ============
     st.markdown("---")
-    st.markdown("### 👤 Login Activity Monitor")
+    st.markdown("### 📋 Complete System Activity Log")
+    st.markdown("*All user actions loaded from Google Sheets*")
     
-    today_activity = get_today_activity()
-    login_events = [log for log in today_activity if log['action'] in ['login', 'logout']]
+    # Add refresh button
+    col_refresh, col_status = st.columns([1, 3])
+    with col_refresh:
+        refresh_clicked = st.button("🔄 Refresh Activity Log", use_container_width=True)
     
-    if login_events:
-        df_logins = pd.DataFrame(login_events)
-        st.dataframe(df_logins[['timestamp', 'username', 'role', 'action']], 
-                    use_container_width=True)
+    # Load activity data
+    if st.session_state.activity_df.empty or refresh_clicked:
+        with st.spinner("Loading activity logs..."):
+            st.session_state.activity_df = get_all_activity_from_sheet()
+    
+    if not st.session_state.activity_df.empty:
+        df_activity = st.session_state.activity_df.copy()
+        
+        # Convert timestamp to datetime for filtering
+        if 'timestamp' in df_activity.columns:
+            df_activity['timestamp'] = pd.to_datetime(df_activity['timestamp'], errors='coerce')
+            
+            # Date range filter
+            col_date1, col_date2 = st.columns(2)
+            with col_date1:
+                if not df_activity['timestamp'].isna().all():
+                    min_date = df_activity['timestamp'].min().date()
+                else:
+                    min_date = datetime.now().date()
+                start_date = st.date_input(
+                    "From Date",
+                    value=min_date,
+                    key="activity_start"
+                )
+            with col_date2:
+                end_date = st.date_input(
+                    "To Date",
+                    value=datetime.now().date(),
+                    key="activity_end"
+                )
+            
+            # Apply date filter
+            mask = (df_activity['timestamp'].dt.date >= start_date) & \
+                   (df_activity['timestamp'].dt.date <= end_date)
+            df_activity = df_activity[mask]
+        
+        # User filter
+        if 'username' in df_activity.columns:
+            users = ['All'] + sorted(df_activity['username'].unique().tolist())
+            selected_user = st.selectbox("Filter by User", users, key="activity_user")
+            if selected_user != 'All':
+                df_activity = df_activity[df_activity['username'] == selected_user]
+        
+        # Action filter
+        if 'action' in df_activity.columns:
+            actions = ['All'] + sorted(df_activity['action'].unique().tolist())
+            selected_action = st.selectbox("Filter by Action", actions, key="activity_action")
+            if selected_action != 'All':
+                df_activity = df_activity[df_activity['action'] == selected_action]
+        
+        # Display count
+        st.success(f"📊 Showing {len(df_activity)} activity records")
+        
+        # Display the data
+        st.dataframe(
+            df_activity.sort_values('timestamp', ascending=False),
+            use_container_width=True,
+            height=500
+        )
+        
+        # Export functionality
+        if not df_activity.empty:
+            buffer = BytesIO()
+            df_activity.to_excel(buffer, index=False, engine='openpyxl')
+            st.download_button(
+                label="📥 Export Activity Log (Excel)",
+                data=buffer.getvalue(),
+                file_name=f"activity_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
     else:
-        st.info("No login activity today")
+        st.info("📭 No activity logs available. Please ensure the Activity Sheet URL is configured in secrets.")
+        
+        # Show configuration help
+        with st.expander("🔧 Activity Sheet Configuration"):
+            st.markdown(f"""
+            **To enable permanent logging:**
+            
+            1. **Create a Google Sheet** with these columns:
+               - Timestamp
+               - Username
+               - Role
+               - Action
+               - Details
+            
+            2. **Add this URL to `.streamlit/secrets.toml`**:
+            ```toml
+            [google_sheets]
+            activity_sheet_url = "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit"
+            ```
+            
+            3. **Current configured URL**: 
+            ```
+            {st.secrets["google_sheets"].get("activity_sheet_url", "Not configured")}
+            ```
+            
+            4. **Make sure the sheet is shared with**: "Anyone with the link can view"
+            """)
     
     # ============ SHEET ACCESS MONITOR ============
     st.markdown("### 📁 Sheet Access Monitor")
     
-    sheet_access = [log for log in today_activity if log['action'] == 'sheet_load']
-    
-    if sheet_access:
-        df_access = pd.DataFrame(sheet_access)
-        display_cols = ['timestamp', 'username', 'details.sheet_type', 'details.sheet_id']
-        st.dataframe(df_access, use_container_width=True)
+    if not st.session_state.activity_df.empty:
+        df_access = st.session_state.activity_df[
+            st.session_state.activity_df['action'] == 'sheet_load'
+        ].copy()
+        
+        if not df_access.empty:
+            st.dataframe(
+                df_access[['timestamp', 'username', 'details']].sort_values('timestamp', ascending=False),
+                use_container_width=True
+            )
+        else:
+            st.info("No sheet access recorded")
     else:
-        st.info("No sheet access today")
+        st.info("No sheet access data available")
     
     # ============ AUTOMATIC REPORTS ============
     st.markdown("---")
@@ -547,45 +715,89 @@ def render_owner_dashboard():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        active_users = len(set([log['username'] for log in today_activity]))
-        st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-        st.metric("Active Users Today", active_users)
-        st.markdown("</div>", unsafe_allow_html=True)
+        if not st.session_state.activity_df.empty:
+            active_users = st.session_state.activity_df['username'].nunique()
+            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+            st.metric("Active Users (All Time)", active_users)
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+            st.metric("Active Users", "N/A")
+            st.markdown("</div>", unsafe_allow_html=True)
     
     with col2:
-        sheets_loaded = len([log for log in today_activity if log['action'] == 'sheet_load'])
-        st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-        st.metric("Sheets Loaded Today", sheets_loaded)
-        st.markdown("</div>", unsafe_allow_html=True)
+        if not st.session_state.activity_df.empty:
+            sheets_loaded = len(st.session_state.activity_df[
+                st.session_state.activity_df['action'] == 'sheet_load'
+            ])
+            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+            st.metric("Total Sheets Loaded", sheets_loaded)
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+            st.metric("Total Sheets Loaded", "N/A")
+            st.markdown("</div>", unsafe_allow_html=True)
     
     with col3:
-        searches = len([log for log in today_activity if 'search' in log['action'].lower()])
-        st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-        st.metric("Total Searches", searches)
-        st.markdown("</div>", unsafe_allow_html=True)
+        if not st.session_state.activity_df.empty:
+            searches = len(st.session_state.activity_df[
+                st.session_state.activity_df['action'].str.contains('search|keyword|finder', case=False, na=False)
+            ])
+            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+            st.metric("Total Searches", searches)
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+            st.metric("Total Searches", "N/A")
+            st.markdown("</div>", unsafe_allow_html=True)
     
     with col4:
-        exports = len([log for log in today_activity if log['action'] == 'export'])
-        st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
-        st.metric("Total Exports", exports)
-        st.markdown("</div>", unsafe_allow_html=True)
+        if not st.session_state.activity_df.empty:
+            exports = len(st.session_state.activity_df[
+                st.session_state.activity_df['action'] == 'export'
+            ])
+            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+            st.metric("Total Exports", exports)
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='metric-card'>", unsafe_allow_html=True)
+            st.metric("Total Exports", "N/A")
+            st.markdown("</div>", unsafe_allow_html=True)
     
     # Most Accessed Sheets
-    st.markdown("### 📊 Most Accessed Sheets Today")
+    st.markdown("### 📊 Most Accessed Sheets")
     
-    sheet_counts = {}
-    for log in [l for l in today_activity if l['action'] == 'sheet_load']:
-        sheet_type = log.get('details', {}).get('sheet_type', 'unknown')
-        sheet_counts[sheet_type] = sheet_counts.get(sheet_type, 0) + 1
-    
-    if sheet_counts:
-        df_counts = pd.DataFrame([
-            {"Sheet": k, "Accesses": v} 
-            for k, v in sorted(sheet_counts.items(), key=lambda x: x[1], reverse=True)
-        ])
-        st.dataframe(df_counts, use_container_width=True)
+    if not st.session_state.activity_df.empty:
+        df_sheets = st.session_state.activity_df[
+            st.session_state.activity_df['action'] == 'sheet_load'
+        ]
+        
+        if not df_sheets.empty:
+            # Extract sheet types from details
+            sheet_counts = {}
+            for _, row in df_sheets.iterrows():
+                details = row.get('details', '')
+                if isinstance(details, str) and 'sheet_type' in details:
+                    try:
+                        # Parse the details dict string
+                        details_dict = ast.literal_eval(details)
+                        sheet_type = details_dict.get('sheet_type', 'unknown')
+                        sheet_counts[sheet_type] = sheet_counts.get(sheet_type, 0) + 1
+                    except:
+                        pass
+            
+            if sheet_counts:
+                df_counts = pd.DataFrame([
+                    {"Sheet": k, "Accesses": v} 
+                    for k, v in sorted(sheet_counts.items(), key=lambda x: x[1], reverse=True)
+                ])
+                st.dataframe(df_counts, use_container_width=True)
+            else:
+                st.info("No sheet access details available")
+        else:
+            st.info("No sheet access recorded")
     else:
-        st.info("No sheet access recorded today")
+        st.info("No activity data available")
     
     # ============ TRANSACTIONS VIEWER ============
     st.markdown("---")
@@ -790,10 +1002,12 @@ def render_sales_dashboard():
                             user['username'], case=False, na=False
                         )]
             
-            if not clients_df.empty:
+            if 'clients_df' in locals() and not clients_df.empty:
                 st.session_state.sales_clients_data = clients_df
                 track_activity("sales_load_clients", {"count": len(clients_df)})
                 st.success(f"Loaded {len(clients_df)} clients")
+            else:
+                st.warning("No clients found for this agent")
         
         if 'sales_clients_data' in st.session_state:
             st.dataframe(st.session_state.sales_clients_data, use_container_width=True, height=400)
@@ -872,7 +1086,7 @@ def render_navigation():
             track_activity("logout", {"username": user['username']})
             # Clear session state
             for key in list(st.session_state.keys()):
-                if key not in ['users_sheet_configured', 'activity_log']:
+                if key not in ['users_sheet_configured', 'activity_log', 'activity_df']:
                     del st.session_state[key]
             st.rerun()
 
