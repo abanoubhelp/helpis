@@ -88,41 +88,73 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================
-# STREAMLIT SECRETS LOADER - DEEP SEEK
+# STREAMLIT SECRETS LOADER - REPLACED WITH BACKWARDS COMPATIBLE VERSION
 # ============================================
 @st.cache_resource
 def load_sheets_from_secrets():
-    """Load all Google Sheets URLs from Streamlit Secrets - DEEP SEEK"""
+    """Load all Google Sheets URLs from Streamlit Secrets.
+    Accepts BOTH JSON strings (with sheet_url) and plain text URLs.
+    Returns dictionary with standardized keys.
+    """
     sheets_config = {}
     
     try:
-        # Users Sheet
-        if 'sheets.users' in st.secrets:
-            users_data = json.loads(st.secrets['sheets.users'])
-            sheets_config['users'] = users_data.get('sheet_url', '')
+        # Define all possible sheet keys we want to extract
+        secret_keys = ['users', 'login', 'properties', 'clients_mother', 'transactions', 'activity']
         
-        # Properties Sheet
-        if 'sheets.properties' in st.secrets:
-            props_data = json.loads(st.secrets['sheets.properties'])
-            sheets_config['properties'] = props_data.get('sheet_url', '')
+        for key in secret_keys:
+            secret_path = f'sheets.{key}'
+            
+            if secret_path in st.secrets:
+                value = st.secrets[secret_path]
+                
+                # CASE 1: Value is a string (most common in TOML)
+                if isinstance(value, str):
+                    value = value.strip()
+                    
+                    # Try to parse as JSON
+                    try:
+                        data = json.loads(value)
+                        if isinstance(data, dict) and 'sheet_url' in data:
+                            sheets_config[key] = data['sheet_url']
+                        else:
+                            # JSON but no sheet_url - store the whole parsed object as string
+                            sheets_config[key] = str(data)
+                    except json.JSONDecodeError:
+                        # Not JSON - treat as plain text URL
+                        sheets_config[key] = value
+                
+                # CASE 2: Value is already a dictionary
+                elif isinstance(value, dict):
+                    if 'sheet_url' in value:
+                        sheets_config[key] = value['sheet_url']
+                    else:
+                        sheets_config[key] = str(value)
+                
+                # CASE 3: Any other type - convert to string
+                else:
+                    sheets_config[key] = str(value)
         
-        # Mother Clients Sheet
-        if 'sheets.clients_mother' in st.secrets:
-            clients_data = json.loads(st.secrets['sheets.clients_mother'])
-            sheets_config['mother_clients'] = clients_data.get('sheet_url', '')
+        # === MAPPING RULES ===
         
-        # Transactions Sheet
-        if 'sheets.transactions' in st.secrets:
-            trans_data = json.loads(st.secrets['sheets.transactions'])
-            sheets_config['transactions'] = trans_data.get('sheet_url', '')
+        # 1. Map clients_mother to mother_clients (for existing code)
+        if 'clients_mother' in sheets_config:
+            sheets_config['mother_clients'] = sheets_config['clients_mother']
         
-        # Login Sheet (if separate)
-        if 'sheets.login' in st.secrets:
-            login_data = json.loads(st.secrets['sheets.login'])
-            sheets_config['login'] = login_data.get('sheet_url', '')
+        # 2. If users is missing but login exists, use login as users
+        if 'users' not in sheets_config and 'login' in sheets_config:
+            sheets_config['users'] = sheets_config['login']
         
-    except Exception as e:
-        # Silent fail - never expose secrets error
+        # 3. Ensure login key exists (some code might expect it)
+        if 'login' not in sheets_config and 'users' in sheets_config:
+            sheets_config['login'] = sheets_config['users']
+        
+        # 4. Clean up - remove any keys with empty values
+        sheets_config = {k: v for k, v in sheets_config.items() if v}
+        
+    except Exception:
+        # SILENT FAIL - NEVER SHOW ERROR TO USER
+        # Return whatever we managed to load
         pass
     
     return sheets_config
